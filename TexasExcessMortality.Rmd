@@ -101,13 +101,15 @@ print.top.n <- function(n, ldf) {
 }
 ```
 
-Plan to model the excess mortality from the winter storms in Texas. I started out by seeing the [BuzzFeed analysis](https://buzzfeednews.github.io/2021-05-tx-winter-storm-deaths/?fbclid=IwAR08P03p9OgtwtQis6Pc8zwhUWimk1dRCyqfim06zCU7o8Ezvd53Z-PjNPU) and article. I thought it might be beneficial to implement a more modern time series modeling approach and make a comparison to large states instead of neighboring states. Below is what I have.
+The plan is to model the excess mortality from the February winter storms in Texas. I saw the BuzzFeed [analysis](https://buzzfeednews.github.io/2021-05-tx-winter-storm-deaths/?fbclid=IwAR08P03p9OgtwtQis6Pc8zwhUWimk1dRCyqfim06zCU7o8Ezvd53Z-PjNPU) and [article](https://www.buzzfeednews.com/article/peteraldhous/texas-winter-storm-power-outage-death-toll). I thought it might be beneficial to implement a more modern time series modeling approach and to make a comparison to large states rather than small neighboring states. Below is what came of it. 
 
-I obtained the data directly from CDC so it would be completely independent of the BuzzFeed analysis.
+Spoiler: my conclusion is similar to that of BuzzFeed though I think the number is probably not as high as the 700 that BuzzFeed estimated. Ultimately, it is hard to tell exactly since there is noise due to random deviations from model expectations and those deviations in large states often amount to 250 deaths weekly in similarly sized states. Thus, the 750 deaths in excess of the model exceeded random expected deviation, but it may only be 500 deaths or so greater than expected. Indeed Florida and California saw deviations in excess of 400 deaths and California had several weeks with greater than 500 deaths above the model.
+
+I obtained the data directly from CDC in the manner described by BuzzFeed so it would be completely independent of the BuzzFeed analysis.
 
 ## Let's import the data
 
-First, I import the data. Then, I perform some overly complicated manipulations to combine New York and New York City so it can be incorporated in the analysis as a full state. The data that I call training data is the the pre-2020 data and the test data is the data starting from January 1st, 2020. At the end of the below code chunk, I convert it to a time series object to facilitate further analyses.
+First, I import the data. Then, I perform some overly complicated manipulations to combine New York and New York City so it can be incorporated in the analysis as a full state. I'm sure there is a more parsimonious way to accomplish this task, but I just wanted to finish the analysis. The data that I call training data is the the pre-2020 data and the test data is the data starting from January 1st, 2020. At the end of the below code chunk, I convert it to a time series object to facilitate further analyses.
 
 ```{r data_import, warning = F, message = F}
 training.df <- read_csv('data/mortality_data_pre2020.csv')
@@ -156,7 +158,7 @@ train.ts <- ts(train.ts %>% select(-week_ending_date),
 
 ## Make basic plots
 
-Let's see what the basic all cause mortality data looks like for the state of Texas. 
+Let's see what the basic all cause mortality data looks like for the state of Texas. Here are the total deaths for each week of the training data.
 
 ```{r basic_plot}
 p.basic <- ggplot(training.df %>% filter(jurisdiction_of_occurrence == 'Texas'), 
@@ -175,7 +177,7 @@ show(p.basic)
 
 ## ARIMA fit with seasonality
 
-I start with a relatively straight forward seasonal ARIMA model or SARIMA. Given the computational complexity of computing lots of different SARIMA models, I simplified the selection scheme to just identify the best ARIMA model and added a first order seasonal diff with a first order moving average. For the ARIMA selection scheme, I used AIC with a greater the 2 cutoff to select the best model. For brevity, that is not shown, but the code is there.
+I start with a relatively straightforward seasonal ARIMA model (aka SARIMA). Given the computational complexity (lots of time) of fitting lots of different SARIMA models, I simplified the selection scheme to just identify the best ARIMA model and added a first order seasonal diff with a first order seasonal moving average. For the ARIMA selection scheme, I used AIC with a cutoff of 2 to select the best model. For brevity, that is not shown, but the code is there.
 
 ```{r sarima_model, warning = F, message = F}
 #fits <- find.fit(train.ts[,'Texas'])
@@ -192,7 +194,7 @@ pred.sarima <- forecast(final.sar.fit,
 
 ## Make combined SARIMA plot
 
-On visual inspection, the fit appears to make sense for Texas below. The plot shows the real data and the prediction based on modeling from old data. The real data includes COVID-related deaths so those will need to be removed.
+On visual inspection, the fit appears to make sense for Texas. The plot shows the real data and the model prediction based on modeling from old data. The real data includes COVID-related deaths so those will need to be removed.
 
 ```{r sarima_plot, warning = F, message = F}
 td.sar <- c(test.df %>% filter(jurisdiction_of_occurrence == 'Texas') %>% select(all_cause))$all_cause
@@ -244,7 +246,7 @@ rm(td.sar, pd.sar, whole_series)
 
 ## Let's just implement a VAR model
 
-While I considered fitting a SARIMA model for each state individually, a better strategy seemed to be to just fit a vector autoregression model for all of the state-level all cause mortality data simultaneously. This will, hopefully, give be a good fit for all of the time series and also allow the information from one time series help with modeling the others. VARselect seems to vacilate between a lag of 3 or 4 depending on the max lags tested. I included trend, intercept and seasonal components. I went ahead and conservatively used a lag of 3 though it is worth noting that a lag of 4 will have a substantial effect on the outcome.
+While I considered fitting a SARIMA model for each state individually, a better strategy seemed to be to just fit a vector auto-regressive model for all of the state-level all cause mortality data simultaneously. This, hopefully, gives be a good fit for all of the time series and also allows the information from one time series to help with modeling the others. I included trend, intercept and seasonal components. VARselect seems to vacilate between a lag of 3 or 4 depending on the max lags tested. I went ahead and conservatively used a lag of 3 though it is worth noting that a lag of 4 may have a substantial effect on the outcome.
 
 ```{r var_model, warning = F}
 fits <- VARselect(train.ts,
@@ -265,7 +267,7 @@ rm(fits)
 
 ## Make combined VAR plot
 
-Here, I plot the VAR plot for just Texas. The plot shows the real data and the expected fit based on prior data. The real data includes COVID-related deaths so those will need to be removed.
+Here, I plot the VAR plot for just Texas. The plot shows the real deaths and the expected deaths based on model predictions. The real data includes COVID-related deaths so those will need to be removed.
 
 ```{r var_plot, warning = F, message = F}
 td.var <- c(test.df %>% filter(jurisdiction_of_occurrence == 'Texas') %>% select(all_cause))$all_cause
@@ -317,7 +319,7 @@ rm(td.var, pd.var, whole_series)
 
 ## Calculate deaths anomalies for VAR and SARIMA in Texas
 
-Here, I calculate the values that we care about including the deaths over expected and the deaths over expected removing COVID-related deaths.
+Here, I calculate the values that we care about including the deaths over expected and the deaths over expected after removing COVID-related deaths.
 
 ```{r calculate_anomalies, warning = F, message = F}
 tmp <- training.df %>% filter(jurisdiction_of_occurrence == 'Texas')
@@ -420,7 +422,7 @@ show(p.anom)
 
 ## Calculate death anomalies for all states using VAR
 
-To make sure there isn't some national effect of this calculation, I go back to the full VAR fit and use it to model the expected deaths for every state in the model. Then, I remove the deaths from COVID to leave excess deaths over expected.
+To make sure there isn't some national underestimation as seen in the Texas data, I go back to the full VAR fit and use it to model the expected deaths for every state in the model. Then, I remove the deaths from COVID to leave excess deaths over expected.
 
 ```{r all_anomalies, warning = F, message = F}
 tmp <- training.df %>% filter(mmwr_week > 3 | mmwr_year != 2014)
@@ -451,7 +453,7 @@ rm(tmp, resid.tmp.var, tmp.var, tmp.test)
 
 ## Make expectation plot of all states with VAR
 
-First, I the real number of weekly deaths in black and overlay the expected number of weekly deaths in dark red. As is obvious, there are several states that have significant deviations from the expectation, but it is clear what is driving that issue. For one, COVID-related deaths are still present. In the next plot, I remove those for all states.
+First, I plot the real number of weekly deaths in black and overlay the expected number of weekly deaths in dark red. That is, I keep COVID deaths in the plot initially. As is obvious, there are several states that have significant deviations from the expectation. In the next plot, I remove COVID deaths for all states.
 
 ```{r var_all, fig.height = 30, fig.width = 9}
 p.var.all <- ggplot(mortality_working) +
@@ -473,7 +475,7 @@ show(p.var.all)
 
 ## Make non-COVID expectation plot of all states with VAR
 
-Below, I again show the real data in black, but now with the COVID deaths removed. In dark red I still show the expectation from the VAR model. Thus, this shows deaths in excess of expectation after removing COVID deaths. This clearly demonstrates that the expectation fits are quite good if COVID deaths are removed. However there are still a few deviations. There may be COVID deaths that aren't correctly counted or simply aren't yet counted in the data; this may be happening in California. Larger states might be expected to have larger absolute numbers of misses. Or, in the case of North Carolina, there appears to be something entirely broken in the data.
+Below, I again show the real data in black, but now with the COVID deaths removed. In dark red I still show the expectation from the VAR model. Therefore, this shows deaths in excess of expectation after removing COVID deaths. This clearly demonstrates that the expectation fits are quite good if COVID deaths are removed. However there are still a few deviations. There may be COVID deaths that aren't correctly counted or simply aren't yet counted in the data; this may be happening in California. Larger states might be expected to have larger absolute numbers of misses. Or, in the case of North Carolina, there appears to be something entirely broken about the data.
 
 ```{r var_excess, fig.height = 30, fig.width = 9}
 p.var.noncovid <- ggplot(mortality_working) +
@@ -495,7 +497,7 @@ show(p.var.noncovid)
 
 ## Make non-COVID expectation plot of with VAR at start of 2021
 
-Then, I show the absolute number of non-COVID deaths in excess of expectation. Essentially, this is substracting the dark red points from the black points above. I only show the data for the start of 2021 to get a sense for the state-wide expectation. Several states show intermittent deviations from the expectation. North Carolina is, again, broken. California has significant deviation. As does Florida, Texas, South Carolina and West Virginia in places.
+I show the absolute number of non-COVID deaths in excess of expectation. Essentially, this is subtracting the dark red points from the black points above. I only show the data for the start of 2021 to get a sense for the nationwide-wide data. Several states show intermittent deviations from the expectation. North Carolina is, again, broken. California has significant residual deviation as does Florida, Texas, South Carolina and West Virginia at times.
 
 ```{r var_excess_feb, fig.height = 30, fig.width = 9}
 p.var.noncovid.feb <- ggplot(mortality_working %>% 
@@ -521,9 +523,9 @@ show(p.var.noncovid.feb)
 
 ## Make non-COVID expectation plot of four largest states with VAR
 
-Finally, I narrow down to the largest four states and the start of 2021 to get a sense for the deviations that are possible in large states. Unfortunately, selecting neighboring states is probably not the right approach. Given that the values are absolute deaths in excess of expectation, the analysis could end up being biased by the size of the state. Larger states would be expected to have larger numbers of deaths incorrectly categorized.
+Finally, I narrow down to the largest four states to get a sense for the deviations that are possible in large states. Unfortunately, selecting neighboring states is probably not the right approach. Given that the values are absolute deaths in excess of expectation, the analysis could end up being biased by the size of the state. Larger states would be expected to have larger numbers of deaths incorrectly categorized.
 
-That being said, there probably is some signal over the 100-200 deaths reported by state agencies during the final two weeks of February 2021 in Texas during the Winter Storm.
+I think I agree with BuzzFeed. Based on these data, there probably were more than the 100-200 deaths reported by state agencies in the final two weeks of February 2021 during the Winter Storm. However, I think the number of deaths is probably closer to 500 rather than 700, but it is hard to know.
 
 ```{r var_excess_four_feb, fig.height = 3, fig.width = 9}
 p.var.noncovid.four.feb <- ggplot(mortality_working %>% 
