@@ -7,7 +7,7 @@ output: html_document
 
 ```{r setup, include = F, message = F}
 knitr::opts_chunk$set(echo = T, fig.align = 'center')
-setwd('~/Desktop/excess_deaths/')
+setwd('~/Desktop/TexasWinterStormDeaths/')
 
 library(easypackages)
 libraries('janitor',
@@ -168,7 +168,7 @@ p.basic <- ggplot(training.df %>% filter(jurisdiction_of_occurrence == 'Texas'),
              size = 3) +
   xlab('week ending date') +
   ylab('total number of deaths') +
-  theme_minimal_hgrid(16)
+  theme_bw(16)
 
 show(p.basic)
 ```
@@ -230,7 +230,7 @@ p.pred.sar <- ggplot(sar.df, aes(x = date,
     name = '',
     values = cols
   ) +
-  theme_minimal_hgrid(16, rel_small = 1) +
+  theme_bw(16) +
   theme(
     legend.position = "top",
     legend.justification = "right",
@@ -303,7 +303,7 @@ p.pred.var <- ggplot(var.df, aes(x = date,
     name = '',
     values = cols
   ) +
-  theme_minimal_hgrid(16, rel_small = 1) +
+  theme_bw(16) +
   theme(
     legend.position = "top",
     legend.justification = "right",
@@ -329,7 +329,7 @@ tmp.mod <- tibble(week_ending_date = tmp$week_ending_date[4:nrow(tmp)],
                   deaths_anomaly_sar = resid.tmp.sar[4:nrow(tmp)],
                   non_covid_deaths_anomaly_var = resid.tmp.var[,'Texas'],
                   non_covid_deaths_anomaly_sar = resid.tmp.sar[4:nrow(tmp)],
-                  label = rep('real', length(resid.tmp.var[,'Texas'])))
+                  label = rep('model residual before 2020', length(resid.tmp.var[,'Texas'])))
 
 mortality_working <- test.df %>% filter(jurisdiction_of_occurrence == 'Texas')
 
@@ -349,7 +349,7 @@ mortality_working <- mortality_working %>%
          non_covid_deaths_anomaly_sar = deaths_anomaly_sar - covid_19_u071_underlying_cause_of_death,
          non_covid_deaths_anomaly_sar_upr = deaths_anomaly_sar_upr - covid_19_u071_underlying_cause_of_death,
          non_covid_deaths_anomaly_sar_lwr = deaths_anomaly_sar_lwr - covid_19_u071_underlying_cause_of_death,
-         label = 'pred')
+         label = 'model residual from 2020')
 
 mortality_working <- tmp.mod %>% full_join(mortality_working)
 rm(tmp, resid.tmp.var, resid.tmp.sar, tmp.mod, tmp.var, tmp.sar)
@@ -380,7 +380,7 @@ p.anom.sar <- ggplot(mortality_working, aes(x = week_ending_date,
     name = '',
     values = cols
   ) +
-  theme_minimal_hgrid(12, rel_small = 1) +
+  theme_bw(12) +
   theme(
     legend.position = "top",
     legend.justification = "right",
@@ -406,7 +406,7 @@ p.anom.var <- ggplot(mortality_working, aes(x = week_ending_date,
     name = '',
     values = cols
   ) +
-  theme_minimal_hgrid(12, rel_small = 1) +
+  theme_bw(12) +
   theme(
     legend.position = "top",
     legend.justification = "right",
@@ -465,8 +465,7 @@ p.var.all <- ggplot(mortality_working) +
              alpha = 0.3) +
   xlab('week ending date') +
   ylab('number of weekly deaths') +
-  theme_minimal_hgrid(12, rel_small = 1) +
-  panel_border() +
+  theme_bw(12) +
   facet_wrap(~jurisdiction_of_occurrence, ncol = 4)
 
 show(p.var.all)
@@ -488,8 +487,7 @@ p.var.noncovid <- ggplot(mortality_working) +
              alpha = 0.3) +
   xlab('week ending date') +
   ylab('number of weekly deaths over COVID') +
-  theme_minimal_hgrid(12, rel_small = 1) +
-  panel_border() +
+  theme_bw(12) +
   facet_wrap(~jurisdiction_of_occurrence, ncol = 4)
 
 show(p.var.noncovid)
@@ -514,8 +512,7 @@ p.var.noncovid.feb <- ggplot(mortality_working %>%
   xlab('week ending date') +
   ylab('excess weekly deaths') +
   ylim(-2000, 2000) +
-  theme_minimal_hgrid(12, rel_small = 1) +
-  panel_border() +
+  theme_bw(12) +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
   facet_wrap(~jurisdiction_of_occurrence, ncol = 4)
 
@@ -547,8 +544,7 @@ p.var.noncovid.four.feb <- ggplot(mortality_working %>%
   xlab('week ending date') +
   ylab('excess weekly deaths') +
   ylim(-800, 800) +
-  theme_minimal_hgrid(12, rel_small = 1) +
-  panel_border() +
+  theme_bw(12) + 
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
   facet_wrap(~jurisdiction_of_occurrence, ncol = 5)
 
