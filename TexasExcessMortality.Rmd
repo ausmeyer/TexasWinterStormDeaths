@@ -521,9 +521,9 @@ show(p.var.noncovid.feb)
 
 ## Make non-COVID expectation plot of four largest states with VAR
 
-Finally, I narrow down to the largest four states and the start of 2021 to get a sense for the deviations that are possible in large states. Unfortunately, selecting neighboring state to Texas is probably not the right approach. Ultimately, given that the presentation is in absolute deaths in excess of expectations the analysis could end up being biased by the size of the state. Larger states would be expected to have larger numbers of deaths incorrectly categorized.
+Finally, I narrow down to the largest four states and the start of 2021 to get a sense for the deviations that are possible in large states. Unfortunately, selecting neighboring states is probably not the right approach. Given that the values are absolute deaths in excess of expectation, the analysis could end up being biased by the size of the state. Larger states would be expected to have larger numbers of deaths incorrectly categorized.
 
-That being said, there probably is some signal there in the final two weeks of February 2021 in Texas during the Winter Storm.
+That being said, there probably is some signal over the 100-200 deaths reported by state agencies during the final two weeks of February 2021 in Texas during the Winter Storm.
 
 ```{r var_excess_four_feb, fig.height = 3, fig.width = 9}
 p.var.noncovid.four.feb <- ggplot(mortality_working %>% 
