@@ -1,0 +1,556 @@
+---
+title: "Texas winter storm excess mortality"
+author: "Austin Meyer"
+date: "5/28/2021"
+output: html_document
+---
+
+```{r setup, include = F, message = F}
+knitr::opts_chunk$set(echo = T, fig.align = 'center')
+setwd('~/Desktop/excess_deaths/')
+
+library(easypackages)
+libraries('janitor',
+          'lubridate',
+          'cowplot',
+          'fpp2',
+          'forecast',
+          'vars',
+          'kableExtra',
+          'tsibble',
+          'timetk',
+          'stringr',
+          'ggalt',
+          'colorspace',
+          'tidyverse')
+
+cols <- c("#E69F00", "#56B4E9")
+
+find.fit <- function(ldf) {
+  fits <- c()
+  ps <- c()
+  ds <- c()
+  qs <- c()
+  Ps <- c()
+  Ds <- c()
+  Qs <- c()
+  for(i in 0:3) {
+    for(j in 0:1) {
+      for(k in 0:3) {
+        for(x in 0) {
+          for(y in 0) {
+            for(z in 0){
+              pError <- tryCatch(
+                {
+                  #cat(paste(i,j,k,'\n'))
+                  
+                  fit <- Arima(ldf, 
+                               order = c(i,j,k),
+                               seasonal = c(x,y,z))
+                  ps <- c(ps, i)
+                  ds <- c(ds, j)
+                  qs <- c(qs, k)
+                  Ps <- c(Ps, x)
+                  Ds <- c(Ds, y)
+                  Qs <- c(Qs, z)
+                  fits <- c(fits, fit$aic)
+                },
+                error = function(e) {}
+              )
+            }
+          }
+        }
+      }
+    }
+  }
+  return(list(aics = fits, ps = ps, ds = ds, qs = qs, Ps = Ps, Ds = Ds, Qs = Qs))
+}
+
+print.top.n <- function(n, ldf) {
+  fits <- ldf[['aics']]
+  ps <- ldf[['ps']]
+  ds <- ldf[['ds']]
+  qs <- ldf[['qs']]
+  Ps <- ldf[['Ps']]
+  Ds <- ldf[['Ds']]
+  Qs <- ldf[['Qs']]
+  
+  ps <- ps[order(fits)]
+  ds <- ds[order(fits)]
+  qs <- qs[order(fits)]
+  Ps <- Ps[order(fits)]
+  Ds <- Ds[order(fits)]
+  Qs <- Qs[order(fits)]
+  
+  fits <- fits[order(fits)]
+  
+  for(i in 1:n) {
+    cat(paste('(', ps[i], 
+              ',', ds[i], 
+              ',', qs[i], 
+              ') ', 
+              '(', Ps[i],
+              ',', Ds[i],
+              ',', Qs[i],
+              ')',
+              'AIC: ', 
+              fits[i], 
+              '\n', 
+              sep = ''))
+  }
+}
+```
+
+Plan to model the excess mortality from the winter storms in Texas. I started out by seeing the [BuzzFeed analysis](https://buzzfeednews.github.io/2021-05-tx-winter-storm-deaths/?fbclid=IwAR08P03p9OgtwtQis6Pc8zwhUWimk1dRCyqfim06zCU7o8Ezvd53Z-PjNPU) and article. I thought it might be beneficial to implement a more modern time series modeling approach and make a comparison to large states instead of neighboring states. Below is what I have.
+
+I obtained the data directly from CDC so it would be completely independent of the BuzzFeed analysis.
+
+## Let's import the data
+
+First, I import the data. Then, I perform some overly complicated manipulations to combine New York and New York City so it can be incorporated in the analysis as a full state. The data that I call training data is the the pre-2020 data and the test data is the data starting from January 1st, 2020. At the end of the below code chunk, I convert it to a time series object to facilitate further analyses.
+
+```{r data_import, warning = F, message = F}
+training.df <- read_csv('data/mortality_data_pre2020.csv')
+test.df <- read_csv('data/mortality_data_post2020.csv')
+
+training.df <- training.df %>%
+  clean_names() %>%
+  select(-starts_with('flag')) %>%
+  mutate(week_ending_date = mdy(week_ending_date)) %>%
+  filter(jurisdiction_of_occurrence != 'United States') %>%
+  mutate(across(where(is.character), str_remove_all, pattern = fixed(" ")))
+
+tmp.df <- bind_cols((training.df %>% filter(jurisdiction_of_occurrence == 'NewYork') %>% select(colnames(training.df)[1:4])), (training.df %>% filter(jurisdiction_of_occurrence == 'NewYork') %>% select(colnames(training.df)[5:ncol(training.df)])) + (training.df %>% filter(jurisdiction_of_occurrence == 'NewYorkCity') %>% select(colnames(training.df)[5:ncol(training.df)])))
+
+training.df <- training.df %>% 
+  filter(jurisdiction_of_occurrence != 'NewYork' &
+           jurisdiction_of_occurrence != 'NewYorkCity') %>%
+  bind_rows(tmp.df) %>%
+  arrange(jurisdiction_of_occurrence, week_ending_date)
+rm(tmp.df)
+
+test.df <- test.df %>%
+  clean_names() %>%
+  select(-starts_with('flag')) %>%
+  mutate(week_ending_date = ymd(week_ending_date)) %>%
+  filter(jurisdiction_of_occurrence != 'United States') %>%
+  mutate(across(where(is.character), str_remove_all, pattern = fixed(" ")))
+
+tmp.df <- bind_cols((test.df %>% filter(jurisdiction_of_occurrence == 'NewYork') %>% select(colnames(test.df)[1:4])), (test.df %>% filter(jurisdiction_of_occurrence == 'NewYork') %>% select(colnames(test.df)[5:ncol(test.df)])) + (test.df %>% filter(jurisdiction_of_occurrence == 'NewYorkCity') %>% select(colnames(test.df)[5:ncol(test.df)])))
+
+test.df <- test.df %>% 
+  filter(jurisdiction_of_occurrence != 'NewYork' &
+           jurisdiction_of_occurrence != 'NewYorkCity') %>%
+  bind_rows(tmp.df) %>%
+  arrange(jurisdiction_of_occurrence, week_ending_date)
+rm(tmp.df)
+
+train.ts <- training.df %>% 
+  select(week_ending_date, jurisdiction_of_occurrence, all_cause) %>% 
+  pivot_wider(names_from = jurisdiction_of_occurrence, values_from = all_cause)
+
+train.ts <- ts(train.ts %>% select(-week_ending_date),
+               start = min(train.ts$week_ending_date),
+               frequency = 52)
+```
+
+## Make basic plots
+
+Let's see what the basic all cause mortality data looks like for the state of Texas. 
+
+```{r basic_plot}
+p.basic <- ggplot(training.df %>% filter(jurisdiction_of_occurrence == 'Texas'), 
+                  aes(x = week_ending_date, 
+                      y = all_cause)) +
+  geom_point(color = '#000000',
+             fill = '#AAAAAA',
+             shape = 21,
+             size = 3) +
+  xlab('week ending date') +
+  ylab('total number of deaths') +
+  theme_minimal_hgrid(16)
+
+show(p.basic)
+```
+
+## ARIMA fit with seasonality
+
+I start with a relatively straight forward seasonal ARIMA model or SARIMA. Given the computational complexity of computing lots of different SARIMA models, I simplified the selection scheme to just identify the best ARIMA model and added a first order seasonal diff with a first order moving average. For the ARIMA selection scheme, I used AIC with a greater the 2 cutoff to select the best model. For brevity, that is not shown, but the code is there.
+
+```{r sarima_model, warning = F, message = F}
+#fits <- find.fit(train.ts[,'Texas'])
+
+#print.top.n(10, fits)
+
+final.sar.fit <- Arima(train.ts[,'Texas'], 
+                       order = c(4,1,4),
+                       season = list(order = c(0,1,1), period = 52))
+
+pred.sarima <- forecast(final.sar.fit,
+                        h = 72)
+```
+
+## Make combined SARIMA plot
+
+On visual inspection, the fit appears to make sense for Texas below. The plot shows the real data and the prediction based on modeling from old data. The real data includes COVID-related deaths so those will need to be removed.
+
+```{r sarima_plot, warning = F, message = F}
+td.sar <- c(test.df %>% filter(jurisdiction_of_occurrence == 'Texas') %>% select(all_cause))$all_cause
+pd.sar <- clean_names(as_tibble(pred.sarima))$point_forecast
+
+whole_series <- c(train.ts[,'Texas'], td.sar, pd.sar)
+
+sar.df <- tibble(date = c(seq.Date(from = min(training.df$week_ending_date), 
+                                   by = 7, 
+                                   length.out = length(train.ts[,'Texas'])),
+                          seq.Date(from = min(test.df$week_ending_date),
+                                   by = 7,
+                                   length.out = length(td.sar)),
+                          seq.Date(from = max(training.df$week_ending_date) + 7,
+                                   by = 7,
+                                   length.out = length(pd.sar))),
+                 point.val = whole_series,
+                 label = c(rep('real', length(train.ts[,5]) + length(td.sar)),
+                           rep('model', length(pd.sar))))
+
+p.pred.sar <- ggplot(sar.df, aes(x = date, 
+                                 y = point.val,
+                                 color = label,
+                                 fill = label)) +
+  geom_point(shape = 21,
+             size = 3,
+             alpha = 0.5) +
+  ylab('number of weekly deaths') +
+  xlab('week ending date') +
+  scale_color_manual(
+    name = '',
+    values = darken(cols, 0.3)
+  ) +
+  scale_fill_manual(
+    name = '',
+    values = cols
+  ) +
+  theme_minimal_hgrid(16, rel_small = 1) +
+  theme(
+    legend.position = "top",
+    legend.justification = "right",
+    legend.text = element_text(size = 9),
+    legend.box.spacing = unit(0, "pt")
+  )
+
+show(p.pred.sar)
+rm(td.sar, pd.sar, whole_series)
+```
+
+## Let's just implement a VAR model
+
+While I considered fitting a SARIMA model for each state individually, a better strategy seemed to be to just fit a vector autoregression model for all of the state-level all cause mortality data simultaneously. This will, hopefully, give be a good fit for all of the time series and also allow the information from one time series help with modeling the others. VARselect seems to vacilate between a lag of 3 or 4 depending on the max lags tested. I included trend, intercept and seasonal components. I went ahead and conservatively used a lag of 3 though it is worth noting that a lag of 4 will have a substantial effect on the outcome.
+
+```{r var_model, warning = F}
+fits <- VARselect(train.ts,
+                  lag.max = 7, 
+                  season = 52,
+                  type = 'both')
+
+print(fits$criteria)
+
+final.var.fit <- VAR(train.ts,
+                     p = 3,
+                     season = 52,
+                     type = 'both')
+
+pred.var <- forecast(final.var.fit, h = 72)
+rm(fits)
+```
+
+## Make combined VAR plot
+
+Here, I plot the VAR plot for just Texas. The plot shows the real data and the expected fit based on prior data. The real data includes COVID-related deaths so those will need to be removed.
+
+```{r var_plot, warning = F, message = F}
+td.var <- c(test.df %>% filter(jurisdiction_of_occurrence == 'Texas') %>% select(all_cause))$all_cause
+pd.var <- clean_names(as_tibble(pred.var$forecast$Texas))$point_forecast
+
+whole_series <- c(train.ts[,'Texas'], td.var, pd.var)
+
+var.df <- tibble(date = c(seq.Date(from = min(training.df$week_ending_date), 
+                                   by = 7, 
+                                   length.out = length(train.ts[,'Texas'])),
+                          seq.Date(from = min(test.df$week_ending_date),
+                                   by = 7,
+                                   length.out = length(td.var)),
+                          seq.Date(from = max(training.df$week_ending_date) + 7,
+                                   by = 7,
+                                   length.out = length(pd.var))),
+                 point.val = whole_series,
+                 label = c(rep('real', length(train.ts[,'Texas']) + length(td.var)),
+                           rep('model', length(pd.var))))
+
+p.pred.var <- ggplot(var.df, aes(x = date, 
+                                 y = point.val,
+                                 color = label,
+                                 fill = label)) +
+  geom_point(shape = 21,
+             size = 3,
+             alpha = 0.5) +
+  ylab('number of weekly deaths') +
+  xlab('week ending date') +
+  scale_color_manual(
+    name = '',
+    values = darken(cols, 0.3)
+  ) +
+  scale_fill_manual(
+    name = '',
+    values = cols
+  ) +
+  theme_minimal_hgrid(16, rel_small = 1) +
+  theme(
+    legend.position = "top",
+    legend.justification = "right",
+    legend.text = element_text(size = 9),
+    legend.box.spacing = unit(0, "pt")
+  )
+
+show(p.pred.var)
+rm(td.var, pd.var, whole_series)
+```
+
+## Calculate deaths anomalies for VAR and SARIMA in Texas
+
+Here, I calculate the values that we care about including the deaths over expected and the deaths over expected removing COVID-related deaths.
+
+```{r calculate_anomalies, warning = F, message = F}
+tmp <- training.df %>% filter(jurisdiction_of_occurrence == 'Texas')
+resid.tmp.var <- residuals(final.var.fit)
+resid.tmp.sar <- residuals(final.sar.fit)
+tmp.mod <- tibble(week_ending_date = tmp$week_ending_date[4:nrow(tmp)],
+                  jurisdiction_of_occurrence = tmp$jurisdiction_of_occurrence[4:nrow(tmp)],
+                  deaths_anomaly_var = resid.tmp.var[,'Texas'],
+                  deaths_anomaly_sar = resid.tmp.sar[4:nrow(tmp)],
+                  non_covid_deaths_anomaly_var = resid.tmp.var[,'Texas'],
+                  non_covid_deaths_anomaly_sar = resid.tmp.sar[4:nrow(tmp)],
+                  label = rep('real', length(resid.tmp.var[,'Texas'])))
+
+mortality_working <- test.df %>% filter(jurisdiction_of_occurrence == 'Texas')
+
+tmp.var <- clean_names(as_tibble(pred.var$forecast$Texas))
+tmp.sar <- clean_names(as_tibble(pred.sarima))
+
+mortality_working <- mortality_working %>% 
+  mutate(deaths_anomaly_var = all_cause - tmp.var$point_forecast,
+         deaths_anomaly_var_upr = all_cause - tmp.var$hi_95,
+         deaths_anomaly_var_lwr = all_cause - tmp.var$lo_95,
+         non_covid_deaths_anomaly_var = deaths_anomaly_var - covid_19_u071_underlying_cause_of_death,
+         non_covid_deaths_anomaly_var_upr = deaths_anomaly_var_upr - covid_19_u071_underlying_cause_of_death,
+         non_covid_deaths_anomaly_var_lwr = deaths_anomaly_var_lwr - covid_19_u071_underlying_cause_of_death,
+         deaths_anomaly_sar = all_cause - tmp.sar$point_forecast,
+         deaths_anomaly_sar_upr = all_cause - tmp.sar$hi_95,
+         deaths_anomaly_sar_lwr = all_cause - tmp.sar$lo_95,
+         non_covid_deaths_anomaly_sar = deaths_anomaly_sar - covid_19_u071_underlying_cause_of_death,
+         non_covid_deaths_anomaly_sar_upr = deaths_anomaly_sar_upr - covid_19_u071_underlying_cause_of_death,
+         non_covid_deaths_anomaly_sar_lwr = deaths_anomaly_sar_lwr - covid_19_u071_underlying_cause_of_death,
+         label = 'pred')
+
+mortality_working <- tmp.mod %>% full_join(mortality_working)
+rm(tmp, resid.tmp.var, resid.tmp.sar, tmp.mod, tmp.var, tmp.sar)
+```
+
+## Plot death anomalies for Texas
+
+These are the plots of the non-COVID deaths over expected for the state of Texas. The data appear to show that there are more deaths than expected after removing COVID for much of the time after January 1st 2020 in the state. It is not clear why that might be the case.
+
+I would also like to point out that the residuals of the real data are dramatically better with the VAR model than with SARIMA. VAR is used exclusively for all further analyses.
+
+```{r plot_anomalies, warning = F, message = F, fig.width = 9}
+p.anom.sar <- ggplot(mortality_working, aes(x = week_ending_date,
+                                            y = non_covid_deaths_anomaly_sar,
+                                            color = label,
+                                            fill = label)) +
+  ylim(-1000, 1000) +
+  geom_point(shape = 21,
+             size = 3,
+             alpha = 0.5) +
+  ylab('number of weekly deaths over COVID') +
+  xlab('week ending date') +
+  scale_color_manual(
+    name = '',
+    values = darken(cols, 0.3)
+  ) +
+  scale_fill_manual(
+    name = '',
+    values = cols
+  ) +
+  theme_minimal_hgrid(12, rel_small = 1) +
+  theme(
+    legend.position = "top",
+    legend.justification = "right",
+    legend.text = element_text(size = 9),
+    legend.box.spacing = unit(0, "pt")
+  )
+
+p.anom.var <- ggplot(mortality_working, aes(x = week_ending_date,
+                                            y = non_covid_deaths_anomaly_var,
+                                            color = label,
+                                            fill = label)) +
+  ylim(-1000, 1000) +
+  geom_point(shape = 21,
+             size = 3,
+             alpha = 0.5) +
+  ylab('number of weekly deaths over COVID') +
+  xlab('week ending date') +
+  scale_color_manual(
+    name = '',
+    values = darken(cols, 0.3)
+  ) +
+  scale_fill_manual(
+    name = '',
+    values = cols
+  ) +
+  theme_minimal_hgrid(12, rel_small = 1) +
+  theme(
+    legend.position = "top",
+    legend.justification = "right",
+    legend.text = element_text(size = 9),
+    legend.box.spacing = unit(0, "pt")
+  )
+
+p.anom <- plot_grid(p.anom.sar, p.anom.var, ncol = 2, labels = NULL)
+show(p.anom)
+```
+
+## Calculate death anomalies for all states using VAR
+
+To make sure there isn't some national effect of this calculation, I go back to the full VAR fit and use it to model the expected deaths for every state in the model. Then, I remove the deaths from COVID to leave excess deaths over expected.
+
+```{r all_anomalies, warning = F, message = F}
+tmp <- training.df %>% filter(mmwr_week > 3 | mmwr_year != 2014)
+resid.tmp.var <- as_tibble(residuals(final.var.fit)) %>% 
+  pivot_longer(names_to = 'jurisdiction_of_occurrence', values_to = 'deaths_anomaly_var', everything()) %>% 
+  arrange(jurisdiction_of_occurrence) %>%
+  mutate(non_covid_deaths_anomaly_var = deaths_anomaly_var)
+tmp <- tmp %>% bind_cols(resid.tmp.var %>% select(deaths_anomaly_var, non_covid_deaths_anomaly_var)) %>%
+  mutate(point_forecast = all_cause + deaths_anomaly_var)
+
+tmp.var <- clean_names(tk_tbl(pred.var))
+colnames(tmp.var) <- c('week_ending_date', 'jurisdiction_of_occurrence',  'point_forecast', 'lo_80', 'hi_80', 'lo_95', 'hi_95')
+tmp.var$week_ending_date <- test.df$week_ending_date
+tmp.test <- test.df %>% left_join(tmp.var)
+
+tmp <- tmp %>% full_join(tmp.test)
+
+mortality_working <- tmp %>% 
+  mutate(deaths_anomaly_var = all_cause - point_forecast,
+         deaths_anomaly_var_upr = all_cause - hi_95,
+         deaths_anomaly_var_lwr = all_cause - lo_95,
+         non_covid_deaths_anomaly_var = deaths_anomaly_var - covid_19_u071_underlying_cause_of_death,
+         non_covid_deaths_anomaly_var_upr = deaths_anomaly_var_upr - covid_19_u071_underlying_cause_of_death,
+         non_covid_deaths_anomaly_var_lwr = deaths_anomaly_var_lwr - covid_19_u071_underlying_cause_of_death) %>%
+  mutate(covid_19_u071_underlying_cause_of_death = replace_na(covid_19_u071_underlying_cause_of_death, 0))
+rm(tmp, resid.tmp.var, tmp.var, tmp.test)
+```
+
+## Make expectation plot of all states with VAR
+
+First, I the real number of weekly deaths in black and overlay the expected number of weekly deaths in dark red. As is obvious, there are several states that have significant deviations from the expectation, but it is clear what is driving that issue. For one, COVID-related deaths are still present. In the next plot, I remove those for all states.
+
+```{r var_all, fig.height = 30, fig.width = 9}
+p.var.all <- ggplot(mortality_working) +
+  geom_point(aes(x = week_ending_date,
+                 y = all_cause),
+             color = 'black',
+             alpha = 0.3) +
+  geom_point(aes(x = week_ending_date,
+                 y = point_forecast),
+             color = 'darkred',
+             alpha = 0.3) +
+  xlab('week ending date') +
+  ylab('number of weekly deaths') +
+  theme_minimal_hgrid(12, rel_small = 1) +
+  panel_border() +
+  facet_wrap(~jurisdiction_of_occurrence, ncol = 4)
+
+show(p.var.all)
+```
+
+## Make non-COVID expectation plot of all states with VAR
+
+Below, I again show the real data in black, but now with the COVID deaths removed. In dark red I still show the expectation from the VAR model. Thus, this shows deaths in excess of expectation after removing COVID deaths. This clearly demonstrates that the expectation fits are quite good if COVID deaths are removed. However there are still a few deviations. There may be COVID deaths that aren't correctly counted or simply aren't yet counted in the data; this may be happening in California. Larger states might be expected to have larger absolute numbers of misses. Or, in the case of North Carolina, there appears to be something entirely broken in the data.
+
+```{r var_excess, fig.height = 30, fig.width = 9}
+p.var.noncovid <- ggplot(mortality_working) +
+  geom_point(aes(x = week_ending_date,
+                 y = all_cause - covid_19_u071_underlying_cause_of_death),
+             color = 'black',
+             alpha = 0.3) +
+  geom_point(aes(x = week_ending_date,
+                 y = point_forecast),
+             color = 'darkred',
+             alpha = 0.3) +
+  xlab('week ending date') +
+  ylab('number of weekly deaths over COVID') +
+  theme_minimal_hgrid(12, rel_small = 1) +
+  panel_border() +
+  facet_wrap(~jurisdiction_of_occurrence, ncol = 4)
+
+show(p.var.noncovid)
+```
+
+## Make non-COVID expectation plot of with VAR at start of 2021
+
+Then, I show the absolute number of non-COVID deaths in excess of expectation. Essentially, this is substracting the dark red points from the black points above. I only show the data for the start of 2021 to get a sense for the state-wide expectation. Several states show intermittent deviations from the expectation. North Carolina is, again, broken. California has significant deviation. As does Florida, Texas, South Carolina and West Virginia in places.
+
+```{r var_excess_feb, fig.height = 30, fig.width = 9}
+p.var.noncovid.feb <- ggplot(mortality_working %>% 
+                               filter(week_ending_date >= '2021-01-01' &
+                                        week_ending_date < '2021-04-15')) +
+  geom_lollipop(aes(x = week_ending_date,
+                    y = all_cause - covid_19_u071_underlying_cause_of_death - point_forecast),
+                color = '#000000',
+                fill = '#AAAAAA',
+                alpha = 0.8,
+                point.size = 2.5,
+                shape = 21,
+                size = 1.1) +
+  xlab('week ending date') +
+  ylab('excess weekly deaths') +
+  ylim(-2000, 2000) +
+  theme_minimal_hgrid(12, rel_small = 1) +
+  panel_border() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  facet_wrap(~jurisdiction_of_occurrence, ncol = 4)
+
+show(p.var.noncovid.feb)
+```
+
+## Make non-COVID expectation plot of four largest states with VAR
+
+Finally, I narrow down to the largest four states and the start of 2021 to get a sense for the deviations that are possible in large states. Unfortunately, selecting neighboring state to Texas is probably not the right approach. Ultimately, given that the presentation is in absolute deaths in excess of expectations the analysis could end up being biased by the size of the state. Larger states would be expected to have larger numbers of deaths incorrectly categorized.
+
+That being said, there probably is some signal there in the final two weeks of February 2021 in Texas during the Winter Storm.
+
+```{r var_excess_four_feb, fig.height = 3, fig.width = 9}
+p.var.noncovid.four.feb <- ggplot(mortality_working %>% 
+                                    filter(jurisdiction_of_occurrence %in% c('California', 
+                                                                             'Texas', 
+                                                                             'NewYork',
+                                                                             'Florida') &
+                                             week_ending_date >= '2021-01-01' &
+                                             week_ending_date < '2021-04-15')) +
+  geom_lollipop(aes(x = week_ending_date,
+                    y = all_cause - covid_19_u071_underlying_cause_of_death - point_forecast),
+                color = '#000000',
+                fill = '#AAAAAA',
+                alpha = 0.8,
+                point.size = 2.5,
+                shape = 21,
+                size = 1.1) +
+  xlab('week ending date') +
+  ylab('excess weekly deaths') +
+  ylim(-800, 800) +
+  theme_minimal_hgrid(12, rel_small = 1) +
+  panel_border() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  facet_wrap(~jurisdiction_of_occurrence, ncol = 5)
+
+show(p.var.noncovid.four.feb)
+```
